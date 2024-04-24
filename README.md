@@ -2,13 +2,24 @@
 
 ## MQTT-Commands
 
+### Sending Commands via mosquitto_pub
+
+`mosquitto_pub -L mqtt://mqtt-user:sweethome@homeassistant.local:1883/[topic] -m [payload]`
+
+
 Whenever an error occurs, it is sent to 'home/somfy/error'
+
+### List all Controllers
+topic: **'home/somfy/getControllers'**
+
+payload: **anything**
+
+Sends all Controllers plus their info to **'home/somfy/log'**
 
 ### Adding Controller
 topic: **'home/somfy/add'**
 
 payload: \<name of controller>
-
 
 
 ### Renaming Controller

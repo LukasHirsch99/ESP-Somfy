@@ -2,7 +2,6 @@
 #define REMOTES_H
 
 #include <Arduino.h>
-#include <string.h>
 #include <EEPROM.h>
 
 #define REMOTE_COUNT 20
@@ -11,19 +10,17 @@
 
 #define mArraySize(a) (sizeof(a) / sizeof(a[0]))
 
-typedef struct Controller
-{
+typedef struct Controller {
   int remoteId;
   unsigned long rollingCode;
   char base_topic[100];
   char name[30]; // empty name = free item
 } Controller;
 
-typedef struct ControllerList
-{
+typedef struct ControllerList {
   unsigned int magicNumber; // dMagicNumber
-  int size;        // size of list
-  int count;       // current count of items in list
+  int size;                 // size of list
+  int count;                // current count of items in list
   Controller list[REMOTE_COUNT];
 } ControllerList;
 
@@ -36,5 +33,6 @@ bool deleteController(const char *name);
 void setupControllers();
 void saveControllers();
 void saveRollingCode(Controller *c);
+String controllersToString();
 
 #endif
