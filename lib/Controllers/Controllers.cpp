@@ -13,14 +13,15 @@ int getMaxRemoteNumber() {
   return max;
 }
 
-bool updateName(Controller *c, const char *newName) {
-  if (c == 0)
+bool updateName(Controller *c, const char *newName, size_t nameLen) {
+  if (c == 0 || nameLen >= MAX_NAME_LEN - 1)
     return false;
 
   Serial.println("Renaming: " + String(c->name));
 
-  strcpy(c->name, newName);
-  Serial.println(c->name);
+  strncpy(c->name, newName, nameLen);
+  c->name[nameLen] = 0;
+  Serial.println("New name: " + String(c->name));
   saveControllers();
   return true;
 }
@@ -47,7 +48,12 @@ Controller *findControllerByRemoteId(int remoteId) {
 
 /// @returns -1 if controller already exists
 /// @returns -2 if no more space available
-int addController(const char *name, unsigned long rc, int remoteId) {
+/// @returns -3 invalid name length
+int addController(const char *name, size_t nameLen, unsigned long rc,
+                  int remoteId) {
+  if (nameLen <= 0 || nameLen >= MAX_NAME_LEN - 1)
+    return -3;
+
   if (findControllerByName(name) != 0) {
     Serial.println("Controller already exists");
     return -1;
@@ -56,7 +62,8 @@ int addController(const char *name, unsigned long rc, int remoteId) {
     if (controllers.list[i].name[0] != 0)
       continue;
 
-    strcpy(controllers.list[i].name, name);
+    strncpy(controllers.list[i].name, name, nameLen);
+    controllers.list[i].name[nameLen] = 0;
     controllers.list[i].remoteId =
         remoteId != 0 ? remoteId : getMaxRemoteNumber() + 1;
     controllers.list[i].rollingCode = rc != 0 ? rc : 1;

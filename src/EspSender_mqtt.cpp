@@ -9,14 +9,46 @@
 #include <SoftwareSerial.h>
 #include <WiFiUdp.h>
 
+#pragma pack(push, 1)
+
+typedef enum {
+  GET_COVERS = 1,
+  COVER_CMD = 2,
+  ADD_COVER = 3,
+  REN_COVER = 4,
+  CUSTOM_CMD = 5
+} OpCode;
+
 typedef struct {
   unsigned short magicNumber; // 2 byte
   unsigned short opcode;      // 2 byte
   unsigned int remoteId;      // 4 byte
-  unsigned long rollingCode;  // 4 byte
-  byte cmd_nameLen;           // 4 bytes
-  unsigned int frameRepeat;   // 4 byte
-} Payload;
+} ReqHeader;
+
+typedef struct {
+  byte command;
+} ReqCoverCmd;
+
+typedef struct {
+  unsigned long rollingCode; // 4 byte
+  byte nameLen;              // 1 bytes
+  char name[1];              // dynamic length
+} ReqAddCover;
+
+typedef struct {
+  byte nameLen; // 1 bytes
+  char name[1]; // dynamic length
+} ReqRenameCover;
+
+typedef struct {
+  unsigned long rollingCode;
+  byte command;
+  unsigned short frameRepeat;
+} ReqCustomCmd;
+
+#pragma pack(pop)
+
+enum LogLevel { INFO, ERROR };
 
 String ringBuffer[RING_BUFFER_SIZE];
 int rbidx = -1;
@@ -24,14 +56,14 @@ int rbidx = -1;
 String callback(char *data);
 void receivedCallback(char *topic, byte *payload, unsigned int length);
 void mqttconnect();
-void addLog(String msg);
+String log(LogLevel level, String msg);
 String getLog();
 String getTimeString();
-String handleGetAllCovers(Payload *p);
-String handleCoverCommand(Payload *p);
-String handleAddCover(Payload *p);
-String handleRenameCover(Payload *p);
-String handleCustomCommand(Payload *p);
+String handleGetAllCovers();
+String handleCoverCommand(ReqHeader *h);
+String handleAddCover(ReqHeader *h);
+String handleRenameCover(ReqHeader *h);
+String handleCustomCommand(ReqHeader *h);
 
 WiFiClient wifiClient;
 
@@ -97,10 +129,11 @@ String callback(char *data) {
   Serial.print("Received data: ");
   Serial.println(data);
 
-  Payload *p = (Payload *)data;
+  ReqHeader *h = (ReqHeader *)data;
 
-  if (p->magicNumber != 0xAFFE)
-    return "ERROR: invalid message format";
+  if (h->magicNumber != 0xAFFE) {
+    return log(ERROR, "invalid message format");
+  }
 
   // Serial.printf("magicNumber: 0x%x\n", p->magicNumber);
   // Serial.printf("opcode: %d\n", p->opcode);
@@ -110,49 +143,49 @@ String callback(char *data) {
   // Serial.printf("arg3: %d\n", p->arg3);
 
   String ret;
-  switch (p->opcode) {
+  switch (h->opcode) {
   // get all remotes
-  case 0x1: {
-    ret = handleGetAllCovers(p);
+  case GET_COVERS: {
+    ret = handleGetAllCovers();
     break;
   }
   // cover control
-  case 0x2: {
-    ret = handleCoverCommand(p);
+  case COVER_CMD: {
+    ret = handleCoverCommand(h);
     break;
   }
   // add cover, optional remoteId and rollingCode (arg1)
-  case 0x3: {
-    ret = handleAddCover(p);
+  case ADD_COVER: {
+    ret = handleAddCover(h);
     break;
   }
   // rename cover
-  case 0x4: {
-    ret = handleRenameCover(p);
+  case REN_COVER: {
+    ret = handleRenameCover(h);
     break;
   }
   // custom command
-  case 0x5: {
-    ret = handleCustomCommand(p);
+  case CUSTOM_CMD: {
+    ret = handleCustomCommand(h);
     break;
   }
   default:
-    ret = "ERROR: invalid opcode: " + String(p->opcode, HEX);
+    ret = log(ERROR, "invalid opcode: " + String(h->opcode, HEX));
   }
   return ret;
 }
 
-String handleGetAllCovers(Payload *p) { return controllersToString(); }
+String handleGetAllCovers() { return controllersToString(); }
 
-String handleCoverCommand(Payload *p) {
-  Controller *c = findControllerByRemoteId(p->remoteId);
+String handleCoverCommand(ReqHeader *h) {
+  Controller *c = findControllerByRemoteId(h->remoteId);
   if (c == 0) {
-    addLog("Cmd, controller: 0x" + String(p->remoteId, HEX) + " not found");
-    return "Cmd, controller: 0x" + String(p->remoteId, HEX) + " not found";
+    return log(ERROR,
+               "controller: 0x" + String(h->remoteId, HEX) + " not found");
   }
 
-  byte cmd = (byte)p->cmd_nameLen;
-  switch (cmd) {
+  ReqCoverCmd *req = (ReqCoverCmd *)((char *)h + sizeof(*h));
+  switch (req->command) {
   case UP:
     sendCommand(UP, c);
     return "open";
@@ -169,61 +202,75 @@ String handleCoverCommand(Payload *p) {
     sendCommand(DEL, c);
 
     if (!deleteController(c)) {
-      addLog("Cmd, failed to remove controller: " + String(c->name));
-      return "Cmd, failed to remove controller: " + String(c->name);
+      return log(ERROR, "failed to remove controller: " + String(c->name));
     }
-    addLog("INFO: removed controller: " + String(c->name));
-    return "removed";
+    return log(INFO, "removed controller: 0x" + String(h->remoteId, HEX));
   }
 
-  addLog("ERROR: wrong cmd: 0x" + String(cmd, HEX));
-  return "ERROR: wrong cmd: 0x" + String(cmd, HEX);
+  return log(ERROR, "wrong cmd: 0x" + String(req->command, HEX));
 }
 
-String handleRenameCover(Payload *p) {
-  Controller *c = findControllerByRemoteId(p->remoteId);
-  int nameLen = p->cmd_nameLen;
-  char *name = (char *)&p->frameRepeat;
-  name[nameLen] = 0;
-  if (!updateName(c, name))
-    return "ERROR: controller does not exist";
-  return "INFO: controller renamed";
+String handleRenameCover(ReqHeader *h) {
+  Controller *c = findControllerByRemoteId(h->remoteId);
+  if (c == 0) {
+    return log(ERROR,
+               "controller: 0x" + String(h->remoteId, HEX) + " not found");
+  }
+
+  ReqRenameCover *req = (ReqRenameCover *)((char *)h + sizeof(*h));
+
+  char *name = (char *)&req->name;
+
+  if (!updateName(c, name, req->nameLen))
+    return log(ERROR, "updating name failed");
+  return log(INFO, "controller renamed");
 }
 
-String handleAddCover(Payload *p) {
-  int nameLen = p->cmd_nameLen;
-  char *name = (char *)&p->frameRepeat;
-  name[nameLen] = 0;
-  unsigned long rc = p->rollingCode;
-  int remoteId = p->remoteId;
+String handleAddCover(ReqHeader *h) {
+  ReqAddCover *req = (ReqAddCover *)((char *)h + sizeof(*h));
+  char *name = (char *)&req->name;
 
   Serial.printf("Adding new cover: %s\n", name);
-  int r = addController(name, rc, remoteId);
-  if (r == -1) {
-    return "ERROR: controller already exists";
+  int r = addController(name, req->nameLen, req->rollingCode, h->remoteId);
+  if (r < 0) {
+    if (r == -1)
+      return log(ERROR, "controller already exists");
+    else if (r == -2)
+      return log(ERROR, "no more controller space available");
+    else if (r == -3)
+      return log(ERROR, "invalid name length");
+    else
+      return log(ERROR, "unknown error occured");
   }
-  if (r == -2) {
-    return "ERROR: no more controller space available";
-  }
-  return "INFO: added cover";
+  return log(INFO, "added cover");
 }
 
-String handleCustomCommand(Payload *p) {
-  buildCustomFrame(p->cmd_nameLen, p->remoteId, p->rollingCode);
-  sendCustomCommand(p->frameRepeat);
+String handleCustomCommand(ReqHeader *h) {
+  ReqCustomCmd *req = (ReqCustomCmd *)((char *)h + sizeof(*h));
+  buildCustomFrame(req->command, h->remoteId, req->rollingCode);
+  sendCustomCommand(req->frameRepeat);
   return "success";
 }
 
-void addLog(String msg) {
+String log(LogLevel level, String msg) {
   String ts = getTimeString();
-  msg.replace("\n", "\\n");
-  String logMsg = ts + " - " + msg;
+  String logMsg = ts + " - ";
+
+  if (level == INFO)
+    logMsg.concat("INFO: ");
+  else if (level == ERROR)
+    logMsg.concat("ERROR: ");
+  logMsg.concat(msg);
+
+  Serial.println(logMsg);
+
   if (rbidx >= RING_BUFFER_SIZE)
     rbidx = 0;
   ringBuffer[rbidx++] = logMsg;
 
   String allLogs = getLog();
   String jsonStr = "{\"log\": \"" + allLogs + "\"}";
+  return logMsg;
 }
 
 String getLog() {
@@ -238,11 +285,12 @@ String getLog() {
       break;
 
     if (i > 0)
-      logMsg.concat("\\n");
+      logMsg.concat("\n");
 
     logMsg.concat(ringBuffer[rbi--]);
   }
 
+  logMsg.replace("\n", "\\n");
   return logMsg;
 }
 
