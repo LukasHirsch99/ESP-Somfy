@@ -4,6 +4,7 @@
 
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #include <NTPClient.h>
 #include <PubSubClient.h>
 #include <SoftwareSerial.h>
@@ -80,7 +81,7 @@ void setup() {
   Serial.println("Starting Somfy");
   Serial.print("Connecting to ");
   Serial.println(wifi_ssid);
-  WiFi.setHostname("esp-somfy-remote");
+  WiFi.setHostname("somfy-remote");
   WiFi.begin(wifi_ssid, wifi_password);
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -92,7 +93,12 @@ void setup() {
   // Print the IP address
   Serial.println("IP-Address: " + WiFi.localIP().toString());
 
+  if (MDNS.begin("somfy-remote")) {
+    Serial.println("mDNS responder started as somfy-remote.local");
+  }
+
   server.begin(); // start TCP server
+  MDNS.addService("somfy-socks", "tcp", TCP_PORT);
   Serial.printf("Server started on %s:%d\n", WiFi.localIP().toString().c_str(),
                 TCP_PORT);
 
@@ -106,6 +112,7 @@ void setup() {
 }
 
 void loop() {
+  MDNS.update();
   WiFiClient client = server.accept(); // check for incoming clients
 
   if (client) {
