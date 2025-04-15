@@ -14,35 +14,19 @@ int getMaxRemoteNumber() {
 }
 
 bool updateName(Controller *c, const char *newName) {
-  Serial.println("Renaming: " + String(c->name));
-
   if (c == 0)
     return false;
 
+  Serial.println("Renaming: " + String(c->name));
+
   strcpy(c->name, newName);
-  char baseTopic[50] = "home/somfy/";
-  strcat(baseTopic, newName);
-  strcpy(c->base_topic, baseTopic);
   Serial.println(c->name);
-  Serial.println(c->base_topic);
   saveControllers();
   return true;
 }
 
-Controller *findControllerByTopic(const char *topic) {
-  int i = 0;
-  for (i = 0; i < controllers.size; i++) {
-    if (controllers.list[i].name[0] == 0)
-      continue;
-    if (strcmp(controllers.list[i].base_topic, topic) == 0)
-      return &controllers.list[i];
-  }
-  return 0;
-}
-
 Controller *findControllerByName(const char *name) {
-  int i = 0;
-  for (i = 0; i < controllers.size; i++) {
+  for (int i = 0; i < controllers.size; i++) {
     if (controllers.list[i].name[0] == 0)
       continue;
     if (strcmp(controllers.list[i].name, name) == 0)
@@ -51,56 +35,69 @@ Controller *findControllerByName(const char *name) {
   return 0;
 }
 
-Controller *addController(const char *name, const char *base_topic) {
-  if (findControllerByTopic(base_topic) != 0) {
-    Serial.println("Controller already existing");
-    return 0;
-  }
+Controller *findControllerByRemoteId(int remoteId) {
   for (int i = 0; i < controllers.size; i++) {
-    if (controllers.list[i].name[0] == 0) {
-      strcpy(controllers.list[i].name, name);
-      strcpy(controllers.list[i].base_topic, base_topic);
-      controllers.list[i].remoteId = getMaxRemoteNumber() + 1;
-      controllers.list[i].rollingCode = 1;
-      if (i >= controllers.count)
-        controllers.count++;
-      saveControllers();
+    if (controllers.list[i].name[0] == 0)
+      continue;
+    if (controllers.list[i].remoteId == remoteId)
       return &controllers.list[i];
-    }
   }
-  Serial.println("No available Controller space");
-  return 0; // All available Controllers used
+  return 0;
 }
 
-bool deleteController(const char *name) {
+/// @returns -1 if controller already exists
+/// @returns -2 if no more space available
+int addController(const char *name, unsigned long rc, int remoteId) {
+  if (findControllerByName(name) != 0) {
+    Serial.println("Controller already exists");
+    return -1;
+  }
+  for (int i = 0; i < controllers.size; i++) {
+    if (controllers.list[i].name[0] != 0)
+      continue;
+
+    strcpy(controllers.list[i].name, name);
+    controllers.list[i].remoteId =
+        remoteId != 0 ? remoteId : getMaxRemoteNumber() + 1;
+    controllers.list[i].rollingCode = rc != 0 ? rc : 1;
+
+    if (i >= controllers.count)
+      controllers.count++;
+    saveControllers();
+    return 0;
+  }
+  Serial.println("No available Controller space");
+  return -2; // All available Controllers used
+}
+
+bool deleteControllerByName(const char *name) {
   for (int i = 0; i < controllers.size; i++) {
     if (strcmp(controllers.list[i].name, name) == 0) {
-      controllers.list[i].name[0] = 0;
-      controllers.list[i].base_topic[0] = 0;
-      controllers.list[i].remoteId = 0;
-      controllers.list[i].rollingCode = 1;
-      saveControllers();
-      return true;
+      return deleteController(&controllers.list[i]);
     }
   }
-  return false; // All available Controllers used
+  return false; // controller not found
+}
+
+bool deleteController(Controller *c) {
+  c->name[0] = 0;
+  c->remoteId = -1;
+  c->rollingCode = 1;
+  saveControllers();
+  return true;
 }
 
 void setupControllers() {
-  Serial.println("Setting up controllers");
-  int i;
-
   EEPROM.begin(sizeof(controllers) + BASE_CONTROLLERLIST);
   EEPROM.get(BASE_CONTROLLERLIST, controllers);
 
   if (controllers.magicNumber != dMagicNumber) {
+    Serial.println("Setting up controllers");
     controllers.magicNumber = dMagicNumber;
     controllers.size = mArraySize(controllers.list);
     controllers.count = 0;
-    for (i = 0; i < controllers.size; i++) {
-
+    for (int i = 0; i < controllers.size; i++) {
       controllers.list[i].name[0] = 0;
-      controllers.list[i].base_topic[0] = 0;
       controllers.list[i].remoteId = 0;
       controllers.list[i].rollingCode = 1;
     }
@@ -115,8 +112,8 @@ void saveControllers() {
 
 // idx = controller index
 void saveRollingCode(Controller *c) {
-  int offset = (char *)&c->rollingCode - (char *)&controllers;
-  offset += BASE_CONTROLLERLIST;
+  int offset = BASE_CONTROLLERLIST;
+  offset += (char *)&c->rollingCode - (char *)&controllers;
   c->rollingCode++; // increment!
   EEPROM.put(offset, c->rollingCode);
   EEPROM.commit();
@@ -127,9 +124,8 @@ String controllersToString() {
   for (int i = 0; i < controllers.size; i++) {
     if (controllers.list[i].name[0] == 0)
       continue;
-    s.concat(String(controllers.list[i].name) + ": " +
-             String(controllers.list[i].base_topic) + ", " +
-             String(controllers.list[i].remoteId) + ": " +
+    s.concat(String(controllers.list[i].name) + ";" +
+             String(controllers.list[i].remoteId) + ";" +
              String(controllers.list[i].rollingCode) + "\n");
   }
   return s;

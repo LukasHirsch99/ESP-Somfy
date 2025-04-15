@@ -6,14 +6,15 @@
 
 #define REMOTE_COUNT 20
 #define BASE_CONTROLLERLIST 16 // Byte offset
-#define dMagicNumber 0xaffaaffa
+#define dMagicNumber 0xaffeaffe
 
 #define mArraySize(a) (sizeof(a) / sizeof(a[0]))
 
+// Maybe try to remove name from this structure
+// and only save the name on hassio
 typedef struct Controller {
-  int remoteId;
+  int remoteId; // remoteId = -1: free item
   unsigned long rollingCode;
-  char base_topic[100];
   char name[30]; // empty name = free item
 } Controller;
 
@@ -26,10 +27,11 @@ typedef struct ControllerList {
 
 int getMaxRemoteNumber();
 bool updateName(Controller *c, const char *newName);
-Controller *findControllerByTopic(const char *topic);
 Controller *findControllerByName(const char *name);
-Controller *addController(const char *name, const char *base_topic);
-bool deleteController(const char *name);
+Controller *findControllerByRemoteId(int remoteId);
+int addController(const char *name, unsigned long rc, int remoteId);
+bool deleteControllerByName(const char *name);
+bool deleteController(Controller *c);
 void setupControllers();
 void saveControllers();
 void saveRollingCode(Controller *c);
