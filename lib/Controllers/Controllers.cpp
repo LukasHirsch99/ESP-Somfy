@@ -51,19 +51,19 @@ Controller *findControllerByRemoteId(int remoteId) {
 /// @returns -3 invalid name length
 int addController(const char *name, size_t nameLen, unsigned long rc,
                   int remoteId) {
-  if (nameLen <= 0 || nameLen >= MAX_NAME_LEN - 1)
+  if (nameLen <= 0 || nameLen >= MAX_NAME_LEN)
     return -3;
 
   if (findControllerByName(name) != 0) {
     Serial.println("Controller already exists");
     return -1;
   }
+
   for (int i = 0; i < controllers.size; i++) {
     if (controllers.list[i].name[0] != 0)
       continue;
 
     strncpy(controllers.list[i].name, name, nameLen);
-    controllers.list[i].name[nameLen] = 0;
     controllers.list[i].remoteId =
         remoteId != 0 ? remoteId : getMaxRemoteNumber() + 1;
     controllers.list[i].rollingCode = rc != 0 ? rc : 1;

@@ -54,7 +54,7 @@ enum LogLevel { INFO, ERROR };
 String ringBuffer[RING_BUFFER_SIZE];
 int rbidx = -1;
 
-String callback(char *data);
+String handleRequest(char *data);
 void receivedCallback(char *topic, byte *payload, unsigned int length);
 void mqttconnect();
 String log(LogLevel level, String msg);
@@ -75,6 +75,7 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 2 * 3600);
 
 WiFiServer server(TCP_PORT); // TCP server on port 1234
+LogLevel lastStatus;
 
 void setup() {
   Serial.begin(115200);
@@ -121,9 +122,16 @@ void loop() {
 
     while (client.connected()) {
       if (client.available()) {
-        // String data = client.readString();
         client.read(buffer, 128);
-        client.println(callback(buffer));
+        String res = handleRequest(buffer);
+
+        int status = 2;
+        if (lastStatus == INFO)
+          status = 0;
+        else if (lastStatus == ERROR)
+          status = 1;
+
+        client.print(String(status) + res);
       }
     }
 
@@ -132,9 +140,8 @@ void loop() {
   }
 }
 
-String callback(char *data) {
-  Serial.print("Received data: ");
-  Serial.println(data);
+String handleRequest(char *data) {
+  log(INFO, "Received data: " + String(data));
 
   ReqHeader *h = (ReqHeader *)data;
 
@@ -182,7 +189,10 @@ String callback(char *data) {
   return ret;
 }
 
-String handleGetAllCovers() { return controllersToString(); }
+String handleGetAllCovers() {
+  log(INFO, "Get all covers");
+  return controllersToString();
+}
 
 String handleCoverCommand(ReqHeader *h) {
   Controller *c = findControllerByRemoteId(h->remoteId);
@@ -195,15 +205,15 @@ String handleCoverCommand(ReqHeader *h) {
   switch (req->command) {
   case UP:
     sendCommand(UP, c);
-    return "open";
+    return log(INFO, "open");
 
   case STOP:
     sendCommand(STOP, c);
-    return "stopped";
+    return log(INFO, "stopped");
 
   case DOWN:
     sendCommand(DOWN, c);
-    return "closed";
+    return log(INFO, "closed");
 
   case DEL:
     sendCommand(DEL, c);
@@ -237,7 +247,6 @@ String handleAddCover(ReqHeader *h) {
   ReqAddCover *req = (ReqAddCover *)((char *)h + sizeof(*h));
   char *name = (char *)&req->name;
 
-  Serial.printf("Adding new cover: %s\n", name);
   int r = addController(name, req->nameLen, req->rollingCode, h->remoteId);
   if (r < 0) {
     if (r == -1)
@@ -262,6 +271,7 @@ String handleCustomCommand(ReqHeader *h) {
 String log(LogLevel level, String msg) {
   String ts = getTimeString();
   String logMsg = ts + " - ";
+  lastStatus = level;
 
   if (level == INFO)
     logMsg.concat("INFO: ");
