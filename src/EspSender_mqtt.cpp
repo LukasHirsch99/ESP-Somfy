@@ -10,8 +10,6 @@
 #include <SoftwareSerial.h>
 #include <WiFiUdp.h>
 
-#pragma pack(push, 1)
-
 typedef enum {
   GET_COVERS = 1,
   COVER_CMD = 2,
@@ -20,31 +18,34 @@ typedef enum {
   CUSTOM_CMD = 5
 } OpCode;
 
+#pragma pack(push, 1)
+
 typedef struct {
-  unsigned short magicNumber; // 2 byte
-  unsigned short opcode;      // 2 byte
-  unsigned int remoteId;      // 4 byte
+  u_int16_t magicNumber; // 2 byte
+  u_int8_t opcode;       // 1 byte
 } ReqHeader;
 
 typedef struct {
-  byte command;
+  u_int32_t remoteId; // 4 byte
+  u_int8_t command;
 } ReqCoverCmd;
 
 typedef struct {
-  unsigned long rollingCode; // 4 byte
-  byte nameLen;              // 1 bytes
-  char name[1];              // dynamic length
+  u_int32_t remoteId;      // 4 byte
+  u_int32_t rollingCode;   // 4 byte
+  char name[MAX_NAME_LEN]; // dynamic length
 } ReqAddCover;
 
 typedef struct {
-  byte nameLen; // 1 bytes
-  char name[1]; // dynamic length
+  u_int32_t remoteId;      // 4 byte
+  char name[MAX_NAME_LEN]; // dynamic length
 } ReqRenameCover;
 
 typedef struct {
-  unsigned long rollingCode;
-  byte command;
-  unsigned short frameRepeat;
+  u_int32_t remoteId; // 4 byte
+  u_int32_t rollingCode;
+  u_int8_t command;
+  u_int8_t frameRepeat;
 } ReqCustomCmd;
 
 #pragma pack(pop)
