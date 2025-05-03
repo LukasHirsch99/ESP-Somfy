@@ -69,7 +69,7 @@ void buildFrame(byte command, Controller *c)
   saveRollingCode(c);
 }
 
-void buildCustomFrame(byte command, int remoteId, unsigned long rollingCode)
+void buildCustomFrame(byte command, u_int32_t remoteId, u_int32_t rollingCode)
 {
   frame[1] = command << 4;     // Which button did  you press? The 4 LSB will be the checksum
   frame[2] = rollingCode >> 8; // Rolling code (big endian)
