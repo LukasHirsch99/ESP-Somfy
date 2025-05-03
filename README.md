@@ -19,18 +19,18 @@ The tcp server also supports mDNS to discover this device on the network.
 - Protocol: `tcp`
 
 
-## The protocol
+# The protocol
 
 All requests start with a header followed by an optional body.
 
-### The header
+## The header
 
 The header consists of two parts:
   1. `magicnumber`: This is 2 bytes and has to be `0xAFFE`
   2. `opcode`: This is 1 byte and has to be one of the valid [opcodes](#opcodes)
 
 
-#### opcodes
+### opcodes
 
 - `1`: [get all covers](#get-covers)
 - `2`: [send command to cover](#cover-commands)
@@ -38,14 +38,14 @@ The header consists of two parts:
 - `4`: [rename a cover](#rename-cover)
 - `5`: [send a custom command](#custom-command)
 
-### Body
+## Body
 
 The body depends on the opcode.
 
-#### get covers
+### get covers
 No need to send a body
 
-#### cover commands
+### cover commands
 
 With this you control the covers.
 Make them go up, down or stop them where they are.
@@ -53,7 +53,7 @@ Make them go up, down or stop them where they are.
 1. `remoteId`: 4 bytes unsigned int to identify the cover
 2. `command`: 1 byte indicating the (command)[#commands]
 
-##### Commands
+#### Commands
 - `stop`: 1
 - `up`: 2
 - `down`: 3
@@ -61,7 +61,7 @@ Make them go up, down or stop them where they are.
 
 The `stop` corresponds to the `my` button on the remote.
 
-#### add cover
+### add cover
 With this body you create a new cover and store it to the EEPROM of the ESP. 
 
 1. `remoteId`: 4 bytes unsigned int
@@ -73,13 +73,13 @@ and set the rollingCode to 0 just set them to `0`.
 
 The name has to be 30 bytes, non empty and zero-padded.
 
-#### rename cover
+### rename cover
 With this body you rename an existing cover and store the new name to the EEPROM of the ESP. 
 
 1. `remoteId`: 4 bytes unsigned int
 2. `name`: 30 bytes long string
 
-#### custom command
+### custom command
 This can be useful for finding the remoteId or rollingCode of a forgotten controller.
 
 1. `remoteId`: 4 bytes unsigned int
