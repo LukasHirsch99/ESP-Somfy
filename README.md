@@ -1,63 +1,39 @@
-# Somfy Remote Emulation
+# Somfy RTS Remote Emulation
 
-## MQTT-Commands
+This project turns a normal EPS-8266 paired with a RTS module into a somfy rts remote controller.
 
-### Sending Commands via mosquitto_pub
+The aim of this project is to provide a IoT capable remote controller for somfy rts devices.
 
-`mosquitto_pub -L mqtt://mqtt-user:sweethome@homeassistant.local:1883/[topic] -m [payload]`
+A breakdown of the protocol can be found here:
+- https://pushstack.wordpress.com/somfy-rts-protocol/
 
+Similar code snippets can be found all over github.
 
-Whenever an error occurs, it is sent to 'home/somfy/error'
+This project combines the somfy protocol with a small tcp server to receive commands over the network.
 
-### List all Controllers
-topic: **'home/somfy/getControllers'**
+You can either write your own client or use my library for python:
+- [somfy-rts-hub](https://github.com/LukasHirsch99/somfy-rts-hub)
 
-payload: **anything**
-
-Sends all Controllers plus their info to **'home/somfy/log'**
-
-### Adding Controller
-topic: **'home/somfy/add'**
-
-payload: \<name of controller>
+The tcp server also supports mDNS to discover this device on the network.
+- Service: `somfy-socks`
+- Protocol: `tcp`
 
 
-### Renaming Controller
-topic: **'home/somfy/\<name of controller>/rename'**
+## The protocol
 
-payload: \<new name of controller>
+All requests start with a header followed by an optional body.
 
-### Using Controller
+### The header
 
-topic: **'home/somfy/\<name of controller>/cmd'**
+The header consists of two parts:
+  1. `MagicNumber`: This is 2 bytes and has to be `0xAFFE`
+  2. `Opcode`: This is 1 byte and has to be one of the valid [Opcodes](#opcodes)
 
-payload: 'u' | 'd' | 's' | 'r'
 
-'u': up \
-'d': down \
-'s': stop \
-'r': remove cover
+#### Opcodes
 
-### Custom Command
-topic: **'home/somfy/custom'**
-
-payload:
-```json
-{
-  "remoteId": <remote id>,
-  "rollingCode": <rolling code>,
-  "command": <one of the 4 commands>,
-  "frameRepeat": <How often the frame gets sent>
-}
-```
-
-### Adding a Custom Controller
-topic: **'home/somfy/addCustom'**
-
-payload:
-```json
-{
-  "remoteId": <remote id>,
-  "rollingCode": <rolling code>
-}
-```
+`1`: get all covers
+`2`: send command to cover
+`3`: add a cover
+`4`: rename a cover
+`5`: send a custom command
