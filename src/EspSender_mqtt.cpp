@@ -1,3 +1,4 @@
+#define DEFINE_WIFI_CREDS
 #include "config.h"
 #include <Controllers.h>
 #include <SomfyProtocol.h>
@@ -121,8 +122,8 @@ void setup() {
   // NTPClient
   timeClient.begin();
 
-  pinMode(transmitPin, OUTPUT);
-  digitalWrite(transmitPin, HIGH);
+  pinMode(TRANSMIT_PIN, OUTPUT);
+  digitalWrite(TRANSMIT_PIN, HIGH);
   setupControllers();
   Serial.println(controllersToString());
 }

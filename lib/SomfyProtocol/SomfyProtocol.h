@@ -5,7 +5,6 @@
 #include <Controllers.h>
 
 #define SYMBOL 640 // [usec]
-#define transmitPin D4
 
 #define STOP 0x1
 #define UP 0x2
