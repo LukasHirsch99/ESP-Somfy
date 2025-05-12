@@ -5,7 +5,6 @@
 #include <Controllers.h>
 
 #define SYMBOL 640 // [usec]
-#define transmitPin D4
 
 #define STOP 0x1
 #define UP 0x2
@@ -16,6 +15,6 @@
 void sendCommand(byte command, Controller *c);
 void sendCustomCommand(byte sync);
 void buildFrame(byte command, Controller* c);
-void buildCustomFrame(byte command, int remoteId, unsigned long rollingCode);
+void buildCustomFrame(byte command, u_int32_t remoteId, u_int32_t rollingCode);
 
 #endif

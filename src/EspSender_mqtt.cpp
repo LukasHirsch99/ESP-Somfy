@@ -1,37 +1,104 @@
+#define DEFINE_WIFI_CREDS
 #include "config.h"
 #include <Controllers.h>
 #include <SomfyProtocol.h>
 
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #include <NTPClient.h>
 #include <PubSubClient.h>
 #include <SoftwareSerial.h>
 #include <WiFiUdp.h>
 
+typedef enum {
+  GET_COVERS = 1,
+  COVER_CMD = 2,
+  ADD_COVER = 3,
+  REN_COVER = 4,
+  CUSTOM_CMD = 5
+} OpCode;
+
+#define SUCCESS 0
+#define INVALID_PAYLOAD_LENGTH 1
+#define INVALID_MAGIC_NUMBER 2
+#define INVALID_OPCODE 3
+
+#pragma pack(push, 1)
+
+typedef struct {
+  u_int16_t magicNumber; // 2 byte
+  u_int8_t opcode;       // 1 byte
+} ReqHeader;
+
+typedef struct {
+  u_int32_t remoteId; // 4 byte
+  u_int8_t command;
+} ReqCoverCmd;
+
+typedef struct {
+  u_int32_t remoteId;    // 4 byte
+  u_int32_t rollingCode; // 4 byte
+  char name[MAX_NAME_LEN];
+} ReqAddCover;
+
+typedef struct {
+  u_int32_t remoteId; // 4 byte
+  char name[MAX_NAME_LEN];
+} ReqRenameCover;
+
+typedef struct {
+  u_int32_t remoteId; // 4 byte
+  u_int32_t rollingCode;
+  u_int8_t command;
+  u_int8_t frameRepeat;
+} ReqCustomCmd;
+
+typedef struct {
+  u_int8_t opcode;
+  u_int8_t status;
+} ResHeader;
+
+#pragma pack(pop)
+
+enum LogLevel { INFO, ERROR };
+
 String ringBuffer[RING_BUFFER_SIZE];
 int rbidx = -1;
+byte *resBuf;
+size_t resBufLng = 0;
 
+void handleRequest(char *data);
 void receivedCallback(char *topic, byte *payload, unsigned int length);
 void mqttconnect();
-void addLog(String msg);
+String log(LogLevel level, String msg);
 String getLog();
 String getTimeString();
+void handleGetAllCovers(ReqHeader *req);
+void handleCoverCommand(ReqHeader *h);
+void handleAddCover(ReqHeader *h);
+void handleRenameCover(ReqHeader *h);
+void handleCustomCommand(ReqHeader *h);
+ResHeader *allocateResHeader();
 
 WiFiClient wifiClient;
-PubSubClient client(wifiClient);
 
 // Define NTP Client to get time
 WiFiUDP ntpUDP;
+
 // 2h offset for summertime
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 2 * 3600);
+
+WiFiServer server(TCP_PORT); // TCP server on port 1234
+LogLevel lastStatus;
+ResHeader res;
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting Somfy");
   Serial.print("Connecting to ");
   Serial.println(wifi_ssid);
-  WiFi.setHostname("esp-somfy-remote");
+  WiFi.setHostname("somfy-remote");
   WiFi.begin(wifi_ssid, wifi_password);
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -43,281 +110,248 @@ void setup() {
   // Print the IP address
   Serial.println("IP-Address: " + WiFi.localIP().toString());
 
-  // Configure to mqtt-server
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(receivedCallback);
-  client.setBufferSize(2048);
+  if (MDNS.begin("somfy-remote")) {
+    Serial.println("mDNS responder started as somfy-remote.local");
+  }
+
+  server.begin(); // start TCP server
+  MDNS.addService("somfy-socks", "tcp", TCP_PORT);
+  Serial.printf("Server started on %s:%d\n", WiFi.localIP().toString().c_str(),
+                TCP_PORT);
 
   // NTPClient
   timeClient.begin();
 
-  pinMode(transmitPin, OUTPUT);
-  digitalWrite(transmitPin, HIGH);
+  pinMode(TRANSMIT_PIN, OUTPUT);
+  digitalWrite(TRANSMIT_PIN, HIGH);
   setupControllers();
   Serial.println(controllersToString());
 }
 
 void loop() {
-  if (!client.connected()) {
-    mqttconnect();
-  }
-  client.loop();
-}
+  MDNS.update();
+  WiFiClient client = server.accept(); // check for incoming clients
 
-void receivedCallback(char *topic, byte *payload, unsigned int length) {
-  String t = String(topic);
-  String name = t;
-  name.replace("home/somfy/", "");
+  if (client) {
+    Serial.println("Client connected");
+    char buffer[128];
+    int dC = 0;
 
-  if (t.endsWith("/custom")) {
-    /**
-     * Payload:
-     * {
-     *  "remoteId": <id>
-     *  "rollingCode": <rollingCode>
-     *  "command": <command>
-     *  "frameRepeat": <numberOfFrameRepetitions>
-     * }
-     */
-
-    StaticJsonDocument<256> doc;
-    deserializeJson(doc, (char *)payload);
-
-    int remoteId = doc["remoteId"].as<int>();
-    unsigned long rollingCode = doc["rollingCode"].as<unsigned long>();
-    char c = doc["command"].as<uint8_t>();
-    int command;
-    int frameRepeat = doc["frameRepeat"].as<int>();
-
-    switch (c) {
-    case 'u':
-      command = UP;
-      break;
-
-    case 'd':
-      command = DOWN;
-      break;
-
-    case 's':
-      command = STOP;
-      break;
-
-    case 'r':
-      command = DEL;
-      break;
-
-    case 'p':
-      command = PROG;
-      break;
-
-    default:
-      addLog("unknown command: " + String(c));
-      return;
-      break;
-    }
-
-    buildCustomFrame(command, remoteId, rollingCode);
-
-    sendCustomCommand(2);
-    for (int i = 0; i < frameRepeat; i++) {
-      sendCustomCommand(7);
-    }
-
-    String ackString = "Custom command, remoteId: ";
-    ackString.concat(remoteId);
-    ackString.concat(", rollingCode: ");
-    ackString.concat(rollingCode);
-    ackString.concat(", cmd: ");
-    ackString.concat(command);
-
-    addLog(ackString);
-  } else if (t.endsWith("/addCustom")) {
-    name.replace("/addCustom", "");
-
-    /**
-     * Payload:
-     * {
-     *  "remoteId": <id>
-     *  "rollingCode": <rollingCode>
-     * }
-     */
-
-    StaticJsonDocument<256> doc;
-    deserializeJson(doc, (char *)payload);
-
-    int remoteId = doc["remoteId"].as<int>();
-    unsigned long rollingCode = doc["rollingCode"].as<unsigned long>();
-
-    Controller *c = addController(name.c_str(), ("home/somfy/" + name).c_str());
-    if (c == 0) {
-      addLog("Custom add, failed to add controller: " + name);
-      return;
-    }
-
-    doc.clear();
-    char discoverPayload[256];
-
-    doc["name"] = name;
-    doc["avty_t"] = "home/somfy/status";
-    doc["cmd_t"] = "home/somfy/" + name + "/cmd";
-    doc["pl_open"] = "u";
-    doc["pl_stop"] = "s";
-    doc["pl_cls"] = "d";
-
-    serializeJson(doc, discoverPayload);
-    client.publish((discovery_topic + "/" + name + "/config").c_str(),
-                   discoverPayload);
-
-    c->remoteId = remoteId;
-    c->rollingCode = rollingCode;
-    saveControllers();
-
-    sendCommand(PROG, c);
-
-    String ackString = "Custom add, added controller: ";
-    ackString.concat(name);
-    ackString.concat(", remoteId: ");
-    ackString.concat(remoteId);
-    ackString.concat(", rollingCode: ");
-    ackString.concat(rollingCode);
-    addLog(ackString);
-  } else if (t.endsWith("/add")) {
-    String cName = String((char *)payload);
-
-    Controller *c =
-        addController(cName.c_str(), ("home/somfy/" + cName).c_str());
-    if (c == 0) {
-      addLog("Add, failed to add controller: " + cName);
-      return;
-    }
-
-    StaticJsonDocument<256> doc;
-    char discoverPayload[256];
-
-    doc["name"] = cName;
-    doc["avty_t"] = "home/somfy/status";
-    doc["cmd_t"] = "home/somfy/" + cName + "/cmd";
-    doc["pl_open"] = "u";
-    doc["pl_stop"] = "s";
-    doc["pl_cls"] = "d";
-
-    serializeJson(doc, discoverPayload);
-    client.publish((discovery_topic + "/" + cName + "/config").c_str(),
-                   discoverPayload);
-
-    sendCommand(PROG, c);
-
-    addLog("Add, added controller: " + cName);
-  } else if (t.endsWith("/rename")) {
-    name.replace("/rename", "");
-    Controller *c = findControllerByName(name.c_str());
-
-    if (updateName(c, (char *)payload))
-      addLog("Rename, renamed: " + name + " to: " + String((char *)payload));
-    else
-      addLog("Rename, controller: " + name + " not found");
-  } else if (t.endsWith("/cmd")) {
-    name.replace("/cmd", "");
-    Controller *c = findControllerByName(name.c_str());
-    char cmd = payload[0];
-    String state;
-
-    if (c == 0) {
-      addLog("Cmd, controller: " + name + " not found");
-      return;
-    }
-
-    switch (cmd) {
-    case 'u':
-      sendCommand(UP, c);
-      state = "open";
-      break;
-
-    case 's':
-      sendCommand(STOP, c);
-      state = "stopped";
-      break;
-
-    case 'd':
-      sendCommand(DOWN, c);
-      state = "closed";
-      break;
-
-    case 'r':
-      sendCommand(DEL, c);
-
-      if (deleteController(name.c_str()))
-        addLog("Cmd, removed controller: " + name);
-      else {
-        addLog("Cmd, failed to remove controller: " + name);
-        return;
+    while (client.connected()) {
+      dC = client.available();
+      if (dC) {
+        client.read(buffer, dC);
+        String res;
+        handleRequest(buffer);
+        client.write(resBuf, resBufLng);
+        free(resBuf);
+        resBufLng = 0;
       }
-      state = "removed";
-      break;
     }
-    String ackString = "Cmd, controller: ";
-    ackString.concat(name);
-    ackString.concat(", cmd: ");
-    ackString.concat(cmd);
-    addLog(ackString);
-    // client.publish((String(c->base_topic) + "/ack").c_str(),
-    // ackString.c_str()); client.publish((String(c->base_topic) +
-    // "/state").c_str(), state.c_str(), true);
-  } else if (t.endsWith("/getControllers")) {
-    addLog(controllersToString());
+
+    client.stop();
+    Serial.println("Client disconnected");
   }
 }
 
-void mqttconnect() {
-  unsigned long connectionStart = millis();
-  // Loop until reconnected
-  while (!client.connected()) {
-    Serial.print("MQTT connecting...");
+void handleRequest(char *data) {
+  log(INFO, "Received data: " + String(data));
 
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-      if (millis() > connectionStart + 60000)
-        ESP.restart();
-    }
+  if (strlen(data) < sizeof(ReqHeader)) {
+    res.status = 1;
+    log(ERROR, "invalid message");
+    return;
+  }
 
-    // Connect to MQTT, with retained last will message "offline"
-    if (client.connect(mqtt_id, mqtt_user, mqtt_password, status_topic, 1, true,
-                       "offline")) {
-      Serial.println("connected");
-      client.subscribe("home/somfy/#", 1);
-      client.publish(status_topic, "online", true);
-      client.publish("home/somfy/state", "On");
-      return;
-    } else {
-      Serial.print("failed, status code = ");
-      Serial.print(client.state());
-      Serial.println(", try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
-    if (millis() > connectionStart + 60000)
-      ESP.restart();
+  ReqHeader *h = (ReqHeader *)data;
+
+  if (h->magicNumber != 0xAFFE) {
+    log(ERROR, "invalid magicNumber");
+    return;
+  }
+
+  switch (h->opcode) {
+  // get all remotes
+  case GET_COVERS: {
+    handleGetAllCovers(h);
+    break;
+  }
+  // cover control
+  case COVER_CMD: {
+    handleCoverCommand(h);
+    break;
+  }
+  // add cover, optional remoteId and rollingCode (arg1)
+  case ADD_COVER: {
+    handleAddCover(h);
+    break;
+  }
+  // rename cover
+  case REN_COVER: {
+    handleRenameCover(h);
+    break;
+  }
+  // custom command
+  case CUSTOM_CMD: {
+    handleCustomCommand(h);
+    break;
+  }
+  default:
+    log(ERROR, "invalid opcode: " + String(h->opcode, HEX));
+    break;
   }
 }
 
-void addLog(String msg) {
+void handleGetAllCovers(ReqHeader *req) {
+  log(INFO, "Get all covers");
+  u_int8_t c = getControllerCount();
+
+  // Allocate space for header, count and covers
+  resBufLng = sizeof(ResHeader) + sizeof(u_int8_t) + c * sizeof(Controller);
+  resBuf = (byte *)malloc(resBufLng);
+
+  ResHeader *h = (ResHeader *)resBuf;
+  h->opcode = req->opcode | 0x80;
+  h->status = 0;
+  u_int8_t *count = (u_int8_t *)(resBuf + sizeof(ResHeader));
+  *count = c;
+  listToByteArray(resBuf + sizeof(ResHeader) + sizeof(u_int8_t));
+}
+
+void handleCoverCommand(ReqHeader *h) {
+  ReqCoverCmd *req = (ReqCoverCmd *)((char *)h + sizeof(*h));
+
+  ResHeader *res = allocateResHeader();
+  res->opcode = h->opcode | 0x80;
+  res->status = 0;
+
+  Controller *c = findControllerByRemoteId(req->remoteId);
+  if (c == 0) {
+    log(ERROR, "controller: 0x" + String(req->remoteId, HEX) + " not found");
+    res->status = 1;
+    return;
+  }
+
+  switch (req->command) {
+  case UP:
+    sendCommand(UP, c);
+    log(INFO, String(c->name) + " opened");
+    break;
+
+  case STOP:
+    sendCommand(STOP, c);
+    log(INFO, String(c->name) + "stopped");
+    break;
+
+  case DOWN:
+    sendCommand(DOWN, c);
+    log(INFO, String(c->name) + "closed");
+    break;
+
+  case DEL:
+    sendCommand(DEL, c);
+    deleteController(c);
+    log(INFO, "removed controller: 0x" + String(req->remoteId, HEX));
+    break;
+  default:
+    res->status = 2;
+    log(ERROR, "wrong cmd: 0x" + String(req->command, HEX));
+    break;
+  }
+}
+
+void handleAddCover(ReqHeader *h) {
+  ReqAddCover *req = (ReqAddCover *)((char *)h + sizeof(*h));
+
+  resBufLng = sizeof(ResHeader) + sizeof(Controller);
+  resBuf = (byte *)malloc(resBufLng);
+  ResHeader *res = (ResHeader *)resBuf;
+  res->opcode = h->opcode | 0x80;
+  res->status = 0;
+
+  int idx = addController(req->name, req->rollingCode, req->remoteId);
+  if (idx < 0) {
+    res->status = -idx;
+    if (idx == -1) {
+      log(ERROR, "name already exists");
+    } else if (idx == -2) {
+      log(ERROR, "remoteId already exists");
+    } else if (idx == -3) {
+      log(ERROR, "no more controller space available");
+    }
+    return;
+  }
+
+  Controller *resC = (Controller *)(resBuf + sizeof(ResHeader));
+  Controller *c = getControllerByIndex(idx);
+  memcpy(resC, c, sizeof(Controller));
+
+  log(INFO, "added " + String(req->name));
+  Serial.println(controllersToString());
+}
+
+void handleRenameCover(ReqHeader *h) {
+  ReqRenameCover *req = (ReqRenameCover *)((char *)h + sizeof(*h));
+
+  ResHeader *res = allocateResHeader();
+  res->opcode = h->opcode | 0x80;
+  res->status = 0;
+
+  Controller *c = findControllerByRemoteId(req->remoteId);
+  if (c == 0) {
+    res->status = 1;
+    log(ERROR, "controller: 0x" + String(req->remoteId, HEX) + " not found");
+  }
+
+  if (!updateName(c, req->name)) {
+    res->status = 2;
+    log(ERROR, "updating name failed");
+  }
+  log(INFO, "controller 0x" + String(c->remoteId, HEX) + " renamed to " +
+                String(req->name));
+}
+
+void handleCustomCommand(ReqHeader *h) {
+  ReqCustomCmd *req = (ReqCustomCmd *)((char *)h + sizeof(*h));
+  ResHeader *res = allocateResHeader();
+  res->opcode = h->opcode | 0x80;
+  res->status = 0;
+  buildCustomFrame(req->command, req->remoteId, req->rollingCode);
+  sendCustomCommand(req->frameRepeat);
+}
+
+ResHeader *allocateResHeader() {
+  resBufLng = sizeof(ResHeader);
+  resBuf = (byte *)malloc(resBufLng);
+  return (ResHeader *)resBuf;
+}
+
+String log(LogLevel level, String msg) {
   String ts = getTimeString();
-  msg.replace("\n", "\\n");
-  String logMsg = ts + " - " + msg;
-  if (++rbidx >= RING_BUFFER_SIZE)
+  String logMsg = ts + " - ";
+  lastStatus = level;
+
+  if (level == INFO)
+    logMsg.concat("INFO: ");
+  else if (level == ERROR)
+    logMsg.concat("ERROR: ");
+  logMsg.concat(msg);
+
+  Serial.println(logMsg);
+
+  if (rbidx >= RING_BUFFER_SIZE)
     rbidx = 0;
-  ringBuffer[rbidx] = logMsg;
+  ringBuffer[rbidx++] = logMsg;
 
   String allLogs = getLog();
   String jsonStr = "{\"log\": \"" + allLogs + "\"}";
-
-  client.publish(log_topic, jsonStr.c_str(), true);
+  return logMsg;
 }
 
 String getLog() {
   String logMsg;
-  int rbi = rbidx;
+  int rbi = rbidx - 1;
+
   for (int i = 0; i < RING_BUFFER_SIZE; i++) {
     if (rbi < 0)
       rbi = RING_BUFFER_SIZE - 1;
@@ -326,11 +360,12 @@ String getLog() {
       break;
 
     if (i > 0)
-      logMsg.concat("\\n");
+      logMsg.concat("\n");
 
     logMsg.concat(ringBuffer[rbi--]);
   }
 
+  logMsg.replace("\n", "\\n");
   return logMsg;
 }
 
