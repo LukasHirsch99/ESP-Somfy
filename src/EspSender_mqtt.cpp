@@ -89,7 +89,8 @@ WiFiUDP ntpUDP;
 // 2h offset for summertime
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 2 * 3600);
 
-WiFiServer server(TCP_PORT); // TCP server on port 1234
+WiFiServer server(TCP_PORT);
+WiFiClient clients[MAX_CLIENTS];
 LogLevel lastStatus;
 ResHeader res;
 
@@ -130,27 +131,40 @@ void setup() {
 
 void loop() {
   MDNS.update();
-  WiFiClient client = server.accept(); // check for incoming clients
+  WiFiClient newClient = server.accept(); // check for incoming clients
 
-  if (client) {
-    Serial.println("Client connected");
-    char buffer[128];
-    int dC = 0;
-
-    while (client.connected()) {
-      dC = client.available();
-      if (dC) {
-        client.read(buffer, dC);
-        String res;
-        handleRequest(buffer);
-        client.write(resBuf, resBufLng);
-        free(resBuf);
-        resBufLng = 0;
+  if (newClient) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (!clients[i]) {
+        clients[i] = newClient;
+        Serial.println("New client connected");
+        break;
       }
     }
+  }
 
-    client.stop();
-    Serial.println("Client disconnected");
+  char reqBuffer[128];
+  // Handle existing clients
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i] && clients[i].connected()) {
+      int dataLen = clients[i].available();
+      if (!dataLen)
+        continue;
+
+      clients[i].read(reqBuffer, dataLen);
+      // String res;
+      handleRequest(reqBuffer);
+      clients[i].write(resBuf, resBufLng);
+      free(resBuf);
+      resBufLng = 0;
+    } else {
+      // Remove disconnected clients
+      if (clients[i]) {
+        clients[i].stop();
+        clients[i] = WiFiClient();
+        Serial.println("Client disconnected");
+      }
+    }
   }
 }
 
