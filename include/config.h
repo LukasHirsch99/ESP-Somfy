@@ -5,6 +5,7 @@
 
 #define RING_BUFFER_SIZE 100
 #define TCP_PORT 42069
+#define MAX_CLIENTS 5
 
 #ifdef DEFINE_WIFI_CREDS
 const char *wifi_ssid = "Fritzi";
